@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Интерактивная карта посёлка</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="map-container">
+        <svg id="map-svg" viewBox="0 0 348 424"></svg>
+        
+        <div class="controls">
+            <button class="control-btn" id="zoom-in" title="Увеличить">+</button>
+            <button class="control-btn" id="zoom-out" title="Уменьшить">−</button>
+            <button class="control-btn" id="reset-zoom" title="Сбросить">⌂</button>
+        </div>
+        
+        <div class="tooltip" id="tooltip">
+            <h3 id="tooltip-title">Участок</h3>
+            <p id="tooltip-content">Информация об участке</p>
+        </div>
+    </div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="map.js"></script>
+</body>
+</html>
