@@ -12,7 +12,9 @@ let state = {
     debtData: null,
     zoom: null,
     lastZoomLevel: 1,
-    isLoading: true // Добавляем флаг загрузки
+    isLoading: true,
+    lastTouchDistance: null, // Для отслеживания жеста pinch-to-zoom
+    touchStartTime: null // Для различения тапа и драга
 };
 
 // Словарь для нормализации буквенных суффиксов
@@ -101,6 +103,21 @@ function getPlaceCenter(pathElement) {
     return {
         x: bbox.x + bbox.width / 2,
         y: bbox.y + bbox.height / 2
+    };
+}
+
+// Функция для вычисления расстояния между двумя точками касания
+function getTouchDistance(touch1, touch2) {
+    const dx = touch1.clientX - touch2.clientX;
+    const dy = touch1.clientY - touch2.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Функция для вычисления центра между двумя точками касания
+function getTouchCenter(touch1, touch2) {
+    return {
+        x: (touch1.clientX + touch2.clientX) / 2,
+        y: (touch1.clientY + touch2.clientY) / 2
     };
 }
 
@@ -559,6 +576,23 @@ function setupPlacesInteractivity() {
         })
         .on('mouseleave', function(event, d) {
             hideTooltip();
+        })
+        // Добавляем обработчики для тач-устройств
+        .on('touchstart', function(event) {
+            event.stopPropagation();
+            state.touchStartTime = Date.now();
+        })
+        .on('touchend', function(event) {
+            event.stopPropagation();
+            // Если тап был коротким (менее 200ms) - считаем его кликом
+            if (Date.now() - state.touchStartTime < 200) {
+                const placeId = normalizePlaceId(this.getAttribute('data-place'));
+                selectPlace(placeId);
+                showTooltip(event, placeId);
+                
+                // Предотвращаем стандартное поведение браузера
+                event.preventDefault();
+            }
         });
 }
 
@@ -606,11 +640,13 @@ function showTooltip(event, placeId) {
         <p><strong>Дата актуальности:</strong> ${debtInfo.date || 'Не указана'}</p>
     `);
 
-    
+    // Для тач-устройств позиционируем тултип выше
+    const isTouchDevice = 'ontouchstart' in window;
     const [x, y] = d3.pointer(event, document.body);
+    
     tooltip
         .style('left', (x + 10) + 'px')
-        .style('top', (y - 10) + 'px')
+        .style('top', (isTouchDevice ? y - 80 : y - 10) + 'px')
         .classed('show', true);
 }
 
@@ -619,7 +655,7 @@ function hideTooltip() {
     d3.select('#tooltip').classed('show', false);
 }
 
-// Настройка зума
+// Настройка зума с улучшенной тач-поддержкой
 function setupZoom() {
     const svg = d3.select('#map-svg');
     const container = d3.select('#map-container');
@@ -633,13 +669,90 @@ function setupZoom() {
         .on('start', function() {
             state.isDragging = true;
             container.style('cursor', 'grabbing');
+            // Скрываем тултип при начале зума/перетаскивания
+            hideTooltip();
         })
         .on('end', function() {
             state.isDragging = false;
             container.style('cursor', 'grab');
+            state.lastTouchDistance = null;
         });
     
+    // Настройка фильтра для жестов
+    state.zoom.filter(function(event) {
+        // Разрешаем колесо мыши, левую кнопку мыши и тач-жесты
+        if (event.type === 'wheel' || 
+            (event.type === 'mousedown' && event.button === 0) ||
+            event.type.startsWith('touch')) {
+            return true;
+        }
+        return false;
+    });
+    
     svg.call(state.zoom);
+    
+    // Дополнительная обработка мультитач жестов
+    setupTouchGestures();
+}
+
+// Дополнительная настройка для тач-жестов
+function setupTouchGestures() {
+    const svg = d3.select('#map-svg');
+    const container = document.getElementById('map-container');
+    
+    container.addEventListener('touchstart', function(event) {
+        if (event.touches.length === 2) {
+            // Начало жеста pinch-to-zoom
+            state.lastTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
+            event.preventDefault(); // Предотвращаем стандартное поведение
+        }
+    }, { passive: false });
+    
+    container.addEventListener('touchmove', function(event) {
+        if (event.touches.length === 2 && state.lastTouchDistance !== null) {
+            // Обработка жеста pinch-to-zoom
+            const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
+            const center = getTouchCenter(event.touches[0], event.touches[1]);
+            
+            // Вычисляем изменение масштаба
+            const scaleChange = currentDistance / state.lastTouchDistance;
+            
+            // Получаем текущее преобразование
+            const currentTransform = d3.zoomTransform(svg.node());
+            let newScale = currentTransform.k * scaleChange;
+            
+            // Ограничиваем масштаб
+            newScale = Math.max(config.minZoom, Math.min(config.maxZoom, newScale));
+            
+            // Вычисляем смещение для сохранения центра масштабирования
+            const point = d3.pointer({clientX: center.x, clientY: center.y}, container);
+            const dx = (point[0] - currentTransform.x) / currentTransform.k;
+            const dy = (point[1] - currentTransform.y) / currentTransform.k;
+            
+            const newX = point[0] - dx * newScale;
+            const newY = point[1] - dy * newScale;
+            
+            // Применяем новое преобразование
+            const newTransform = d3.zoomIdentity.translate(newX, newY).scale(newScale);
+            svg.call(state.zoom.transform, newTransform);
+            
+            state.lastTouchDistance = currentDistance;
+            event.preventDefault(); // Предотвращаем стандартное поведение
+        }
+    }, { passive: false });
+    
+    // Предотвращаем стандартное поведение жестов в контейнере
+    container.addEventListener('gesturestart', function(event) {
+        event.preventDefault();
+    });
+    
+    container.addEventListener('gesturechange', function(event) {
+        event.preventDefault();
+    });
+    
+    container.addEventListener('gestureend', function(event) {
+        event.preventDefault();
+    });
 }
 
 // Настройка обработчиков событий
@@ -666,6 +779,15 @@ function setupEventListeners() {
             hideTooltip();
         }
     });
+    
+    // Добавляем обработчик для закрытия тултипа при тапе вне участка на мобильных
+    if ('ontouchstart' in window) {
+        document.addEventListener('touchstart', function(event) {
+            if (!event.target.closest('path[data-place]') && !event.target.closest('#tooltip')) {
+                hideTooltip();
+            }
+        });
+    }
 }
 
 // Функции зума
